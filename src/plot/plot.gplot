@@ -1,0 +1,220 @@
+set style data histograms
+#set datafile separator "\t"
+set style fill solid
+set terminal pngcairo size 800,600 font 'Helvetica,12'
+set border linewidth 2
+# Legend
+# Axes label
+set xlabel 'Allocation option'
+set ylabel 'Count'
+set grid y
+# Axis ranges
+#set xrange[-2*pi:2*pi]
+#set yrange[-1.5:1.5]
+# Tics in LaTeX format
+#set format '$%g$'
+# Axis labels
+set xtics noenhanced rotate by -15
+set ytics 
+#set ytics scale 10
+
+filename="plot__synt.dat"
+
+#fig1
+set title "Average TLB misses comparison"
+set output "tlb_misses_pktgen.png"
+plot "<awk '$2==0' ".filename every ::0::100 using 9:xtic(1) linecolor "#9e281e" title "TLB load misses", \
+'' every ::0::100 using 15:xtic(1) linecolor rgb "#56130d" title "TLB store misses"
+
+set key off
+#fig3
+set title "Average page faults comparison"
+set output "page_faults_pktgen.png"
+plot "<awk '$2==0' ".filename every ::0::100 using 3:xtic(1) linecolor "#9e281e"
+
+#fig4
+#set title "Average cache misses comparison"
+#set output "cache_misses_pktgen.png"
+#plot "<awk '$2==0' ".filename every ::0::100 using 24:xtic(1) linecolor "#9e281e"
+
+#fig4
+set title "Average instructions comparison"
+set output "instruction_pktgen.png"
+plot "<awk '$2==0' ".filename using 21:xtic(1) linecolor "#9e281e"
+
+
+#fig5
+set title "Average elapsed time comparison"
+set output "time_pktgen.png"
+set ylabel "Time [s]"
+plot "<awk '$2==0' ".filename every ::0::100 using 30:xtic(1) linecolor "#9e281e"
+
+#fig1b
+set title "Average TLB load miss rates comparison"
+set output "tlb_miss_rate_loads_pktgen.png"
+set ylabel 'TLB_{miss}/TLB_{tot}'
+plot "<awk '$2==0' ".filename every ::0::100 using ($9/$6):xtic(1) linecolor "#9e281e" title "TLB load miss rate"
+
+#fig1b
+set title "Average TLB load miss rates comparison"
+set output "tlb_miss_rate_loads_pktgen2.png"
+set ylabel '(TLB_{miss}/TLB_{tot}) x10^{-5}'
+plot newhistogram "" at 0, "<awk '$2==0' plot_25.dat" using (($9/$6)*100000):xtic(1) linecolor "#9e281e" title "TLB load miss rate" \
+, newhistogram "" at 1, "<awk '$2==0' plot_26.dat" using (($9/$6)*100000):xtic(1) linecolor "#9e281e" title "TLB load miss rate" \
+, newhistogram "" at 2, "<awk '$2==0' plot_5.dat" using (($9/$6)*100000):xtic(1) linecolor "#9e281e" title "TLB load miss rate"
+
+#fig1b
+set title "Average TLB store miss rates comparison"
+set output "tlb_miss_rate_store_pktgen.png"
+set ylabel 'TLB_{miss}/TLB_{tot}'
+plot "<awk '$2==0' ".filename every ::0::100 using ($15/$12):xtic(1) linecolor "#9e281e" title "TLB store miss rate"
+
+#fig1b
+set title "Average TLB store miss rates comparison"
+set output "tlb_miss_rate_store_pktgen2.png"
+set ylabel 'TLB_{miss}/TLB_{tot}'
+plot newhistogram "" at 0, "<awk '$2==0' plot_25.dat" using ($9/$6):xtic(1) linecolor "#9e281e" title "TLB load miss rate" \
+, newhistogram "" at 1, "<awk '$2==0' plot_26.dat" using ($9/$6):xtic(1) linecolor "#9e281e" title "TLB load miss rate" \
+, newhistogram ""at 2, "<awk '$2==0' plot_5.dat" using ($9/$6):xtic(1) linecolor "#9e281e" title "TLB load miss rate"
+
+#fig1b
+set title "Average TLB load hit rates comparison"
+set output "tlb_hit_load_rate_std.png"
+set ylabel 'TLB_{hit}/s'
+plot "<awk '$2==0' ".filename every ::0::100 using (($6-$9)/$6):xtic(1) linecolor "#9e281e" title "TLB hit rate"
+
+#fig1b
+set title "Average TLB store hit rates comparison"
+set output "tlb_hit_store_rate_std.png"
+set ylabel 'TLB_{hit}/s'
+plot "<awk '$2==0' ".filename every ::0::100 using (($12-$15)/$12):xtic(1) linecolor "#9e281e" title "TLB hit rate"
+
+set style data linespoints
+set style line 1 \
+    linecolor rgb '#630b03' \
+    linetype 1 linewidth 2 \
+    pointtype 7 pointsize 1.5
+set style line 2 \
+    linecolor rgb '#991206' \
+    linetype 1 linewidth 2 \
+    pointtype 5 pointsize 1.5
+set style line 3 \
+    linecolor rgb '#d64437' \
+    linetype 1 linewidth 2 \
+    pointtype 4 pointsize 1.5
+set style line 4 \
+    linecolor rgb '#630b03' \
+    linetype 1 linewidth 2 \
+    pointtype 3 pointsize 1.5
+set style line 5 \
+    linecolor rgb '#7a0d03' \
+    linetype 1 linewidth 2 \
+    pointtype 2 pointsize 1.5
+set style line 6 \
+	linecolor rgb '#050044' \
+	linetype 1 linewidth 2 \
+	pointtype 1 pointsize 1.5
+
+#fig6
+set key on
+set xtics noenhanced rotate by 0
+set title "Average packet loss increasing delay"
+set output "loss_pktgen.png"
+set ylabel "Packet loss [%]"
+set xlabel "Delay factor"
+set yrange [0:10]
+set key noenhanced at 955,30
+plot 'plot_25.dat' every ::0::100 using 2:($39*100/1000000000) linestyle 1 pointinterval 5 title "HUGETLB", \
+'plot_26.dat' every ::0::100 using 2:($39*100/1000000000) linestyle 2 pointinterval 5 title "TRANSHUGE", \
+'plot_5.dat' every ::0::100 using 2:($39*100/1000000000) linestyle 6 pointinterval 5 title "RX_RING"
+#, \
+#'plot_5.dat' every ::0::100 using 2:($39*100/1000000000) linestyle 2 pointinterval 10 title "RX_RING"
+#,\
+#'plot_26.dat' every ::0::100 using 2:($39*100/10000000) linestyle 3 title "CONTIG",\
+#'plot_27.dat' every ::0::100 using 2:($39*100/10000000) linestyle 4 title "DISCONTIG",\
+#'plot_28.dat' every ::0::100 using 2:($39*100/10000000) linestyle 5 title "SWP_CONTIG"
+
+set key on
+set xtics noenhanced rotate by 0
+set title "HUGETLB:Average packet loss increasing delay"
+set output "loss_pktgen25.png"
+set ylabel "Packet loss [%]"
+set xlabel "Delay factor"
+set yrange [0:10]
+set key noenhanced at 955,30
+plot 'plot_25.dat' every ::0::100 using 2:($39*100/1000000000) linestyle 1 pointinterval 5 title "HUGETLB"
+
+set title "TRANSHUGE: Average packet loss increasing delay"
+set output "loss_pktgen26.png"
+set ylabel "Packet loss [%]"
+set xlabel "Delay factor"
+set yrange [0:10]
+set key noenhanced at 955,30
+plot 'plot_26.dat' every ::0::100 using 2:($39*100/1000000000):($40*100/1000000000) linestyle 1 pointinterval 5 title "TRANSHUGE" with yerrorbars
+
+set title "RX_RING: Average packet loss increasing delay"
+set output "loss_pktgen5.png"
+set ylabel "Packet loss [%]"
+set xlabel "Delay factor"
+set yrange [0:10]
+set key noenhanced at 955,30
+plot 'plot_5.dat' every ::0::100 using 2:($39*100/1000000000) linestyle 1 pointinterval 5 title "RX_RING"
+
+
+#fig6c
+
+set key on
+set xtics noenhanced rotate by 0
+set title "Average packet loss increasing delay"
+set output "loss_zoom0_pktgen.png"
+set ylabel "Packet loss [%]"
+set xlabel "Delay factor"
+set yrange [46:51]
+set xrange [400:450]
+set key noenhanced at 955,30
+plot 'plot_25.dat' every ::0::100 using 2:($39*100/1000000000) linestyle 1 title "HUGETLB", \
+'plot_5.dat' every ::0::100 using 2:($39*100/1000000000) linestyle 2 title "RX_RING"
+#,\
+#'plot_26.dat' every ::0::100 using 2:($39*100/10000000) linestyle 3 title "CONTIG",\
+#'plot_27.dat' every ::0::100 using 2:($39*100/10000000) linestyle 4 title "DISCONTIG",\
+#'plot_28.dat' every ::0::100 using 2:($39*100/10000000) linestyle 5 title "SWP_CONTIG"
+
+
+#fig6
+set style data linespoints
+set key on
+set xtics noenhanced rotate by 0
+set title "Average packet loss increasing delay"
+set output "loss_zoom_pktgen.png"
+set ylabel "Packet loss [%]"
+set xlabel "Delay factor"
+set yrange [0:20]
+plot [x=0:1000] 50 linecolor "#60b340" title "Threshold"
+set key noenhanced at 190,6
+plot 'plot_25.dat' every ::0::20 using 2:($39*100/1000000000) linestyle 1 title "HUGETLB", \
+'plot_26.dat' every ::0::20 using 2:($39*100/1000000000) linestyle 1 title "TRANSHUGE", \
+'plot_5.dat' every ::0::20 using 2:($39*100/1000000000) linestyle 5 title "RX_RING"
+#,\
+#'plot_26.dat' every ::0::20 using 2:($39*100/10000000) linestyle 2 title "CONTIG",\
+#'plot_27.dat' every ::0::20 using 2:($39*100/10000000) linestyle 3 title "DISCONTIG",\
+#'plot_28.dat' every ::0::20 using 2:($39*100/10000000) linestyle 4 title "SWP_CONTIG"
+
+#fig6 ##b72417 #d64437 #630b03"
+
+set xtics noenhanced rotate by 0
+set title "Average packet loss increasing delay"
+set output "loss_zoom2_std.png"
+set ylabel "Packet loss [%]"
+set xlabel "Delay factor"
+set yrange [0:5]
+set xrange [0:200]
+set key noenhanced at 25,1.9
+plot 'plot_25.dat' every ::0::10 using 2:($39*100/1000000000) linestyle 1 title "HUGETLB", \
+'plot_26.dat' every ::0::10 using 2:($39*100/1000000000) linestyle 1 title "TRANSHUGE", \
+'plot_5.dat' every ::0::10 using 2:($39*100/1000000000) linestyle 2 title "RX_RING"
+#,\
+#'plot_26.dat' every ::0::10 using 2:($39*100/10000000) linestyle 3 title "CONTIG",\
+#'plot_27.dat' every ::0::10 using 2:($39*100/10000000) linestyle 4 title "DISCONTIG",\
+#'plot_28.dat' every ::0::10 using 2:($39*100/10000000) linestyle 5 title "SWP_CONTIG"
+
+

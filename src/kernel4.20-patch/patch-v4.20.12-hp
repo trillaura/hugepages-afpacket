@@ -1,0 +1,481 @@
+diff --git a/net/packet/Kconfig b/net/packet/Kconfig
+index cc55b35f80e5..658f70dfa3d0 100644
+--- a/net/packet/Kconfig
++++ b/net/packet/Kconfig
+@@ -22,3 +22,15 @@ config PACKET_DIAG
+ 	---help---
+ 	  Support for PF_PACKET sockets monitoring interface used by the ss tool.
+ 	  If unsure, say Y.
++
++source "fs/Kconfig"
++source "mm/Kconfig"
++
++config PACKET_HUGE
++	tristate "Packet socket buffers backed with huge pages"
++	depends on PACKET && HUGETLBFS && TRANSPARENT_HUGEPAGE
++	default n
++	---help---
++		Support for AF_PACKET socket buffers backed with huge pages,
++		both using the HugeTLB filesystem and the Transparent Huge Pages.
++		If unsure, say N.
+diff --git a/net/packet/af_packet.c b/net/packet/af_packet.c
+index 3b1a78906bc0..31b1df24e219 100644
+--- a/net/packet/af_packet.c
++++ b/net/packet/af_packet.c
+@@ -96,6 +96,10 @@
+ #include <net/compat.h>
+ 
+ #include "internal.h"
++#ifdef CONFIG_PACKET_HUGE
++#include <linux/hugetlb.h>
++#include "if_huge_packet.h"
++#endif
+ 
+ /*
+    Assumptions:
+@@ -2970,6 +2974,9 @@ static int packet_release(struct socket *sock)
+ 	struct packet_fanout *f;
+ 	struct net *net;
+ 	union tpacket_req_u req_u;
++#ifdef CONFIG_PACKET_HUGE
++	int option;
++#endif
+ 
+ 	if (!sk)
+ 		return 0;
+@@ -3000,12 +3007,26 @@ static int packet_release(struct socket *sock)
+ 	lock_sock(sk);
+ 	if (po->rx_ring.pg_vec) {
+ 		memset(&req_u, 0, sizeof(req_u));
++#ifdef CONFIG_PACKET_HUGE
++		if (po->huge_mm.shmaddr)
++			option = PACKET_HUGETLB_RING;
++		else if (po->huge_mm.thp_block)
++			option = PACKET_TRANSHUGE_RING;
++		else
++			option = PACKET_RX_RING;
++		packet_set_ring(sk, &req_u, 1, option);
++#else
+ 		packet_set_ring(sk, &req_u, 1, 0);
++#endif
+ 	}
+ 
+ 	if (po->tx_ring.pg_vec) {
+ 		memset(&req_u, 0, sizeof(req_u));
++#ifdef CONFIG_PACKET_HUGE
++		packet_set_ring(sk, &req_u, 1, PACKET_TX_RING);
++#else
+ 		packet_set_ring(sk, &req_u, 1, 1);
++#endif
+ 	}
+ 	release_sock(sk);
+ 
+@@ -3602,7 +3623,7 @@ packet_setsockopt(struct socket *sock, int level, int optname, char __user *optv
+ 	struct sock *sk = sock->sk;
+ 	struct packet_sock *po = pkt_sk(sk);
+ 	int ret;
+-
++	
+ 	if (level != SOL_PACKET)
+ 		return -ENOPROTOOPT;
+ 
+@@ -3628,6 +3649,31 @@ packet_setsockopt(struct socket *sock, int level, int optname, char __user *optv
+ 		return ret;
+ 	}
+ 
++#ifdef CONFIG_PACKET_HUGE
++	case PACKET_HUGETLB_ENABLE:
++	{
++		unsigned long val;
++		
++		if (optlen != sizeof(val))
++			return -EINVAL;
++
++		if (copy_from_user(&val, optval, optlen))
++			return -EFAULT;
++
++		if (po->huge_mm.shmaddr)
++			return -EEXIST;
++
++		po->huge_mm.shmaddr = val;
++
++		return 0;
++	}
++
++	case PACKET_HUGETLB_RING:
++	case PACKET_TRANSHUGE_RING:
++	case PACKET_GFPNORETRY_RING:
++	case PACKET_VZALLOC_RING:
++	case PACKET_GFPRETRY_RING:
++#endif
+ 	case PACKET_RX_RING:
+ 	case PACKET_TX_RING:
+ 	{
+@@ -3650,9 +3696,20 @@ packet_setsockopt(struct socket *sock, int level, int optname, char __user *optv
+ 		} else {
+ 			if (copy_from_user(&req_u.req, optval, len))
+ 				ret = -EFAULT;
++#ifdef CONFIG_PACKET_HUGE
++			else {
++				if (optname == PACKET_HUGETLB_RING
++						&& !po->huge_mm.shmaddr)
++					ret = -EINVAL;
++				else
++					ret = packet_set_ring(sk, &req_u,
++							0, optname);
++			}
++#else
+ 			else
+ 				ret = packet_set_ring(sk, &req_u, 0,
+ 						    optname == PACKET_TX_RING);
++#endif
+ 		}
+ 		release_sock(sk);
+ 		return ret;
+@@ -4162,30 +4219,175 @@ static const struct vm_operations_struct packet_mmap_ops = {
+ 	.close	=	packet_mm_close,
+ };
+ 
++#ifdef CONFIG_PACKET_HUGE
++static void free_one_pg_huge(int index, unsigned long kaddr, 
++		unsigned int len, struct huge_mm *hmm)
++{
++	int i;
++
++	if (current->mm)
++		up_read(&current->mm->mmap_sem);
++
++	for (i = 0; i< hmm->npages; ++i) {
++		if (!PageReserved(hmm->hblocks[index][i]))
++			SetPageDirty(hmm->hblocks[index][i]);
++
++		put_page(hmm->hblocks[index][i]);
++	}
++
++	if (current->mm)
++		down_read(&current->mm->mmap_sem);
++
++	vfree(hmm->hblocks[index]);
++
++	if (index == len) {
++		hmm->npages = 0;
++		hmm->shmaddr = 0UL;
++		vfree(hmm->hblocks);
++		hmm->hblocks = NULL;
++	}
++}
++#endif
++
++#ifdef CONFIG_PACKET_HUGE
++/*
++ * Order is set to 0 when the block is backed with huge pages.
++ * Len is equal to the block size in the case of block backed with
++ * huge pages; otherwise, len is the number of blocks in the buffer; 
++ */
++static void free_pg_vec(struct pgv *pg_vec, unsigned int order,
++			unsigned int len, struct huge_mm *hmm)
++#else
+ static void free_pg_vec(struct pgv *pg_vec, unsigned int order,
+ 			unsigned int len)
++#endif
+ {
+ 	int i;
+ 
+ 	for (i = 0; i < len; i++) {
+ 		if (likely(pg_vec[i].buffer)) {
++#ifdef CONFIG_PACKET_HUGE
++			if (hmm->shmaddr)
++				free_one_pg_huge(i, 
++					(unsigned long)pg_vec[i].buffer,
++					len, hmm);
++			else if (is_vmalloc_addr(pg_vec[i].buffer))
++				vfree(pg_vec[i].buffer);
++#else
+ 			if (is_vmalloc_addr(pg_vec[i].buffer))
+ 				vfree(pg_vec[i].buffer);
++#endif
+ 			else
+ 				free_pages((unsigned long)pg_vec[i].buffer,
+ 					   order);
+ 			pg_vec[i].buffer = NULL;
+ 		}
+ 	}
++
+ 	kfree(pg_vec);
+ }
+ 
++#ifdef CONFIG_PACKET_HUGE
++static char *alloc_one_pg_vec_hugepage(int index, unsigned long size, 
++		int block_nr, struct huge_mm *hmm)
++{
++	char *buffer;
++	void *base_addr;
++	unsigned long user_addr;
++	unsigned long block;
++	struct page **hpages;
++	int npages, nid, pinned;
++
++	user_addr = hmm->shmaddr + index*size;
++
++	/* block size already aligned */
++	npages = size / PAGE_SIZE;
++
++	if (!index) {
++		hmm->hblocks = vmalloc(block_nr * sizeof(struct page **));
++		if (hmm->hblocks == NULL) {
++			pr_err("[ERROR] in allocation of %d huge blocks pointers", 
++					block_nr);	
++			goto fail;
++		}
++	}
++
++	if (!hmm->npages)
++		hmm->npages = npages;
++
++	hpages = vmalloc(npages * sizeof(struct page *));
++	if (hpages == NULL) {
++		pr_err("alloc_one_pg_vec_huge: vmalloc failed");
++		goto fail;
++	}
++
++	pinned = get_user_pages_fast(user_addr, npages, 1, hpages);
++	if (pinned != npages) {
++		vfree(hpages);
++		pr_err("alloc_one_pg_vec_huge: gup failed");
++		goto fail;
++	}
++
++	nid = page_to_nid(hpages[0]);
++	base_addr = vm_map_ram(hpages, npages, nid, PAGE_KERNEL);
++	if (!base_addr) {
++		vfree(hpages);
++		pr_err("alloc_one_pg_vec_huge: vm_map_ram failed");
++		goto fail;
++	}
++
++	hmm->hblocks[index] = hpages;
++
++	block = (unsigned long) base_addr;
++	buffer = (char *) block;
++	if (buffer)
++		return buffer;
++
++fail:
++	return NULL;
++}
++#endif
++
++#ifdef CONFIG_PACKET_HUGE
++static char *alloc_one_pg_vec_page(unsigned long order, int opt)
++#else
+ static char *alloc_one_pg_vec_page(unsigned long order)
++#endif
+ {
+ 	char *buffer;
+ 	gfp_t gfp_flags = GFP_KERNEL | __GFP_COMP |
+ 			  __GFP_ZERO | __GFP_NOWARN | __GFP_NORETRY;
+ 
++#ifdef CONFIG_PACKET_HUGE
++	switch (opt) {
++	
++	case PACKET_TRANSHUGE_RING:
++		gfp_flags |= GFP_TRANSHUGE;
++		buffer = (char *) __get_free_pages(gfp_flags, order);
++		if (buffer)
++			return buffer;
++		break;
++
++	case PACKET_GFPNORETRY_RING:
++		buffer = (char *) __get_free_pages(gfp_flags, order);
++		if (buffer)
++			return buffer;
++		break;
++
++	case PACKET_VZALLOC_RING:
++		buffer = vzalloc(array_size((1 << order), PAGE_SIZE));
++		if (buffer)
++			return buffer;
++
++	case PACKET_GFPRETRY_RING:
++		gfp_flags &= ~__GFP_NORETRY;
++		buffer = (char *) __get_free_pages(gfp_flags, order);
++		if (buffer)
++			return buffer;
++		break;
++
++	default:
++#endif
+ 	buffer = (char *) __get_free_pages(gfp_flags, order);
+ 	if (buffer)
+ 		return buffer;
+@@ -4200,23 +4402,43 @@ static char *alloc_one_pg_vec_page(unsigned long order)
+ 	buffer = (char *) __get_free_pages(gfp_flags, order);
+ 	if (buffer)
+ 		return buffer;
+-
++#ifdef CONFIG_PACKET_HUGE
++	}
++#endif
+ 	/* complete and utter failure */
+ 	return NULL;
+ }
+ 
++#ifdef CONFIG_PACKET_HUGE
++static struct pgv *alloc_pg_vec(struct tpacket_req *req,
++		struct huge_mm *hmm, int option)
++#else
+ static struct pgv *alloc_pg_vec(struct tpacket_req *req, int order)
++#endif
+ {
+ 	unsigned int block_nr = req->tp_block_nr;
+ 	struct pgv *pg_vec;
+ 	int i;
++#ifdef CONFIG_PACKET_HUGE
++	unsigned long size = req->tp_block_size;
++	int order = get_order(size);
++#endif
+ 
+ 	pg_vec = kcalloc(block_nr, sizeof(struct pgv), GFP_KERNEL);
+ 	if (unlikely(!pg_vec))
+ 		goto out;
+ 
+ 	for (i = 0; i < block_nr; i++) {
++#ifdef CONFIG_PACKET_HUGE
++		if (hmm->shmaddr)
++			pg_vec[i].buffer = alloc_one_pg_vec_hugepage(
++					i, size, block_nr, hmm); 
++		else
++			pg_vec[i].buffer = alloc_one_pg_vec_page(order, 
++					option);
++#else
+ 		pg_vec[i].buffer = alloc_one_pg_vec_page(order);
++#endif
+ 		if (unlikely(!pg_vec[i].buffer))
+ 			goto out_free_pgvec;
+ 	}
+@@ -4225,13 +4447,23 @@ static struct pgv *alloc_pg_vec(struct tpacket_req *req, int order)
+ 	return pg_vec;
+ 
+ out_free_pgvec:
++#ifdef CONFIG_PACKET_HUGE
++	if (pg_vec)
++		free_pg_vec(pg_vec, order, req->tp_block_nr, hmm);
++#else
+ 	free_pg_vec(pg_vec, order, block_nr);
++#endif
+ 	pg_vec = NULL;
+ 	goto out;
+ }
+ 
++#ifdef CONFIG_PACKET_HUGE
++static int packet_set_ring(struct sock *sk, union tpacket_req_u *req_u,
++		int closing, int optname)
++#else
+ static int packet_set_ring(struct sock *sk, union tpacket_req_u *req_u,
+ 		int closing, int tx_ring)
++#endif
+ {
+ 	struct pgv *pg_vec = NULL;
+ 	struct packet_sock *po = pkt_sk(sk);
+@@ -4242,6 +4474,13 @@ static int packet_set_ring(struct sock *sk, union tpacket_req_u *req_u,
+ 	int err = -EINVAL;
+ 	/* Added to avoid minimal code churn */
+ 	struct tpacket_req *req = &req_u->req;
++#ifdef CONFIG_PACKET_HUGE
++	int tx_ring = (optname == PACKET_TX_RING);
++	int huge_ring = (optname == PACKET_HUGETLB_RING);
++	int thuge_ring = (optname == PACKET_TRANSHUGE_RING);
++	unsigned int hpagesize = huge_page_size(&default_hstate);
++	po->huge_mm.thp_block = thuge_ring;
++#endif
+ 
+ 	rb = tx_ring ? &po->tx_ring : &po->rx_ring;
+ 	rb_queue = tx_ring ? &sk->sk_write_queue : &sk->sk_receive_queue;
+@@ -4279,6 +4518,14 @@ static int packet_set_ring(struct sock *sk, union tpacket_req_u *req_u,
+ 			goto out;
+ 		if (unlikely(!PAGE_ALIGNED(req->tp_block_size)))
+ 			goto out;
++#ifdef CONFIG_PACKET_HUGE
++		if (unlikely(!IS_ALIGNED(req->tp_block_size, HPAGE_PMD_SIZE)
++				&& thuge_ring))
++			goto out;
++		if (unlikely(!IS_ALIGNED(req->tp_block_size, hpagesize)
++				&& huge_ring))
++			goto out;
++#endif
+ 		min_frame_size = po->tp_hdrlen + po->tp_reserve;
+ 		if (po->tp_version >= TPACKET_V3 &&
+ 		    req->tp_block_size <
+@@ -4300,7 +4547,11 @@ static int packet_set_ring(struct sock *sk, union tpacket_req_u *req_u,
+ 
+ 		err = -ENOMEM;
+ 		order = get_order(req->tp_block_size);
++#ifdef CONFIG_PACKET_HUGE
++		pg_vec = alloc_pg_vec(req, &po->huge_mm, optname);
++#else
+ 		pg_vec = alloc_pg_vec(req, order);
++#endif
+ 		if (unlikely(!pg_vec))
+ 			goto out;
+ 		switch (po->tp_version) {
+@@ -4379,8 +4630,13 @@ static int packet_set_ring(struct sock *sk, union tpacket_req_u *req_u,
+ 			prb_shutdown_retire_blk_timer(po, rb_queue);
+ 	}
+ 
++#ifdef CONFIG_PACKET_HUGE
++	if (pg_vec)
++		free_pg_vec(pg_vec, order, req->tp_block_nr, &po->huge_mm);
++#else
+ 	if (pg_vec)
+ 		free_pg_vec(pg_vec, order, req->tp_block_nr);
++#endif
+ out:
+ 	return err;
+ }
+@@ -4417,6 +4673,12 @@ static int packet_mmap(struct file *file, struct socket *sock,
+ 	if (size != expected_size)
+ 		goto out;
+ 
++#ifdef CONFIG_PACKET_HUGE
++	if (po->huge_mm.shmaddr) {
++		vma->vm_flags |= VM_LOCKED;
++		goto done;
++	}
++#endif
+ 	start = vma->vm_start;
+ 	for (rb = &po->rx_ring; rb <= &po->tx_ring; rb++) {
+ 		if (rb->pg_vec == NULL)
+@@ -4438,6 +4700,9 @@ static int packet_mmap(struct file *file, struct socket *sock,
+ 		}
+ 	}
+ 
++#ifdef CONFIG_PACKET_HUGE
++done:
++#endif
+ 	atomic_inc(&po->mapped);
+ 	vma->vm_ops = &packet_mmap_ops;
+ 	err = 0;
+diff --git a/net/packet/internal.h b/net/packet/internal.h
+index 3bb7c5fb3bff..86e878858384 100644
+--- a/net/packet/internal.h
++++ b/net/packet/internal.h
+@@ -3,6 +3,9 @@
+ #define __PACKET_INTERNAL_H__
+ 
+ #include <linux/refcount.h>
++#ifdef CONFIG_PACKET_HUGE
++#include "if_huge_packet.h"
++#endif
+ 
+ struct packet_mclist {
+ 	struct packet_mclist	*next;
+@@ -131,6 +134,9 @@ struct packet_sock {
+ 	struct net_device __rcu	*cached_dev;
+ 	int			(*xmit)(struct sk_buff *skb);
+ 	struct packet_type	prot_hook ____cacheline_aligned_in_smp;
++#ifdef CONFIG_PACKET_HUGE
++	struct huge_mm 		huge_mm;
++#endif
+ };
+ 
+ static struct packet_sock *pkt_sk(struct sock *sk)
