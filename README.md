@@ -1,7 +1,9 @@
 # Huge pages impact analisys on high speed network packet capture in the Linux kernel
 
 _Master thesis for the course of Computer Science and Information Engineering_
+
 _Advisor: Marco Cesati_
+
 _Co-advisors: Emiliano Betti, Pierpaolo Santucci_
 
 ## Abstract
@@ -19,8 +21,7 @@ _Co-advisors: Emiliano Betti, Pierpaolo Santucci_
 
 ## Content
 
-* docs/: documentation (slides, thesis text)
-
+* docs/: documentation (slides, thesis full text)
 * src/kernel4.20-patch: kernel patch (git diff) + added header
 * src/pktgen.sh: script that generates packets using the kernel synthetic packet generator
 * src/replay.sh: script that sends packets using tcpreplay
