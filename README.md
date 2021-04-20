@@ -24,9 +24,9 @@ _Co-advisors: Emiliano Betti, Pierpaolo Santucci_
 - src/pktgen.sh: script used to generate packets using the kernel synthetic packet generator
 - src/replay.sh: script to send packets using tcpreplay
 - src/run.sh: script to run the whole process:
-  -- capturing packets
-  -- sending packet trace
-  -- performance dumping
+-- capturing packets
+-- sending packet trace
+-- dumping performance counters
 - src/capture: application that exploits nre features offered by the patch
 - src/utils: useful libraries for the capture application
 - src/plot, src/stats: scripts for plotting test measurements
