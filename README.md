@@ -19,17 +19,14 @@ _Co-advisors: Emiliano Betti, Pierpaolo Santucci_
 
 ## Content
 
-- docs/: documentation (slides, thesis text)
-- src/kernel4.20-patch: kernel patch (git diff) + added header
-- src/pktgen.sh: script used to generate packets using the kernel synthetic packet generator
-- src/replay.sh: script to send packets using tcpreplay
-- src/run.sh: script to run the whole process:
--- capturing packets
--- sending packet trace
--- dumping performance counters
-- src/capture: application that exploits nre features offered by the patch
-- src/utils: useful libraries for the capture application
-- src/plot, src/stats: scripts for plotting test measurements
+* docs/: documentation (slides, thesis text)
+
+* src/kernel4.20-patch: kernel patch (git diff) + added header
+* src/pktgen.sh: script that generates packets using the kernel synthetic packet generator
+* src/replay.sh: script that sends packets using tcpreplay
+* src/run.sh: script that runs the whole process: capturing packets, sending packet trace, dumping performance counters
+* src/capture, src/utils: application that exploits the features offered by the patch
+* src/plot, src/stats: scripts for plotting test measurements
 
 ## License
 
